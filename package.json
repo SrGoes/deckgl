@@ -1,0 +1,26 @@
+{
+  "name": "deckgl-hello",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@deck.gl/aggregation-layers": "^9.0.20",
+    "@deck.gl/geo-layers": "^9.0.20",
+    "@deck.gl/layers": "^9.0.20",
+    "@deck.gl/react": "^9.0.20",
+    "deck.gl": "^9.0.20",
+    "h3-js": "^4.1.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.2.0",
+    "vite": "^5.0.10",
+    "vite-plugin-singlefile": "^2.3.0"
+  }
+}
