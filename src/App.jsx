@@ -1,9 +1,11 @@
 import React, { useMemo, useState, useCallback } from 'react'
 import { DeckGL } from '@deck.gl/react'
-import { ScatterplotLayer, BitmapLayer } from '@deck.gl/layers'
-import { HexagonLayer, HeatmapLayer } from '@deck.gl/aggregation-layers'
+import { BitmapLayer, ScatterplotLayer } from '@deck.gl/layers'
 import { H3HexagonLayer, TileLayer } from '@deck.gl/geo-layers'
-import * as h3 from 'h3-js'
+
+import { useBusStops } from './hooks/useBusStops'
+import { useMapSelection } from './hooks/useMapSelection'
+import HudPanel from './components/HudPanel'
 
 const INITIAL_VIEW_STATE = {
   longitude: -46.6333,
@@ -19,27 +21,8 @@ const SP_BOUNDS = {
   minZoom: 9, maxZoom: 16
 }
 
-const SAO_PAULO_BBOX = { south: -24.05, west: -47.06, north: -23.30, east: -46.30 }
-
-const CAPITAL_DATA = [
-  { name: 'São Paulo', position: [-46.6333, -23.5505], color: [0, 128, 255] },
-  { name: 'Rio de Janeiro', position: [-43.1729, -22.9068], color: [65, 105, 225] },
-  { name: 'Belo Horizonte', position: [-43.9345, -19.9167], color: [100, 149, 237] }
-]
-
 const MAP_STYLES = [
-  { url: 'https://basemaps.cartocdn.com/rastertiles/voyager_nolabels/{z}/{x}/{y}@2x.png', labels: 'https://basemaps.cartocdn.com/rastertiles/voyager_only_labels/{z}/{x}/{y}@2x.png', label: 'Carto Voyager' },
-  { url: 'https://basemaps.cartocdn.com/light_nolabels/{z}/{x}/{y}@2x.png', labels: 'https://basemaps.cartocdn.com/light_only_labels/{z}/{x}/{y}@2x.png', label: 'Carto Light' },
-  { url: 'https://basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}@2x.png', labels: 'https://basemaps.cartocdn.com/rastertiles/voyager_only_labels/{z}/{x}/{y}@2x.png', label: 'Carto Dark' },
-  { url: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png', labels: null, label: 'OpenStreetMap' }
-]
-
-const LAYER_MODES = [
-  { value: 'scatter', label: '📍 Scatter (capitais)' },
-  { value: 'hexagon', label: '⬡ Hexagon (agregação)' },
-  { value: 'heatmap', label: '🔥 Heatmap (densidade)' },
-  { value: 'h3', label: '🔷 H3 (capitais)' },
-  { value: 'h3-bus', label: '🚌 H3 — Ônibus SP' }
+  { url: 'https://basemaps.cartocdn.com/rastertiles/voyager_nolabels/{z}/{x}/{y}@2x.png', labels: 'https://basemaps.cartocdn.com/rastertiles/voyager_only_labels/{z}/{x}/{y}@2x.png', label: 'Carto Voyager' }
 ]
 
 const clamp = (val, min, max) => Math.max(min, Math.min(max, val))
@@ -145,83 +128,55 @@ function getStyles(collapsed) {
 export default function App() {
   const [viewState, setViewState] = useState(INITIAL_VIEW_STATE)
   const [mapStyleUrl, setMapStyleUrl] = useState(MAP_STYLES[0].url)
-  const [layerMode, setLayerMode] = useState('scatter')
-  const [hudCollapsed, setHudCollapsed] = useState(false)
-  const [radiusPx, setRadiusPx] = useState(10)
-  const [hexRadiusMeters, setHexRadiusMeters] = useState(15000)
-  const [hexElevationScale, setHexElevationScale] = useState(50)
-  const [h3Resolution, setH3Resolution] = useState(8)
-  const [selectedHexes, setSelectedHexes] = useState(() => new Set())
-  const [selectionConfirmed, setSelectionConfirmed] = useState(false)
-  const [busStops, setBusStops] = useState([])
-  const [loadingBus, setLoadingBus] = useState(false)
-  const [busError, setBusError] = useState('')
+  const [hudCollapsed, setHudCollapsed] = useState(false);
+  const [h3Resolution, setH3Resolution] = useState(8);
 
-  const handleHexClick = useCallback(({ object }) => {
-    if (!object) return
-    const hexId = object.hex || object.hexagon
-    if (!hexId) return
-    setSelectedHexes(prev => {
-      const next = new Set(prev)
-      next.has(hexId) ? next.delete(hexId) : next.add(hexId)
-      return next
-    })
-  }, [])
+  // Hook para pontos de ônibus
+  const {
+    busStops,
+    loadingBus,
+    busError,
+    fetchBusStops,
+    busStopsWithHex
+  } = useBusStops(h3Resolution)
 
-  const handleRemoveHex = useCallback((hexId) => {
-    setSelectedHexes(prev => {
-      const next = new Set(prev)
-      next.delete(hexId)
-      return next
-    })
-    setSelectionConfirmed(false)
-  }, [])
+  // Hook para seleção de hexágonos
+  const {
+    selectedHexes,
+    setSelectedHexes,
+    selectionConfirmed,
+    setSelectionConfirmed,
+    handleHexClick,
+    handleRemoveHex,
+    handleClearSelection,
+    selectedHexesArray,
+    selectedBusStops
+  } = useMapSelection(h3Resolution, busStopsWithHex)
 
-  const handleClearSelection = useCallback(() => {
-    setSelectedHexes(new Set())
-    setSelectionConfirmed(false)
-  }, [])
-
-  const handleMove = useCallback((evt) => {
-    const next = evt.viewState
+  const handleMove = React.useCallback((evt) => {
+    const next = evt.viewState;
     setViewState(prev => {
-      if (!prev) return next
+      if (!prev) return next;
       const clamped = {
         ...next,
         longitude: clamp(next.longitude, SP_BOUNDS.minLng, SP_BOUNDS.maxLng),
         latitude: clamp(next.latitude, SP_BOUNDS.minLat, SP_BOUNDS.maxLat),
         zoom: clamp(next.zoom, SP_BOUNDS.minZoom, SP_BOUNDS.maxZoom)
+      };
+      if (
+        prev.longitude === clamped.longitude &&
+        prev.latitude === clamped.latitude &&
+        prev.zoom === clamped.zoom &&
+        prev.pitch === clamped.pitch &&
+        prev.bearing === clamped.bearing
+      ) {
+        return prev;
       }
-      if (prev.longitude === clamped.longitude && prev.latitude === clamped.latitude &&
-          prev.zoom === clamped.zoom && prev.pitch === clamped.pitch && prev.bearing === clamped.bearing) {
-        return prev
-      }
-      return clamped
-    })
-  }, [])
+      return clamped;
+    });
+  }, []);
 
-  const fetchBusStops = useCallback(async () => {
-    setLoadingBus(true)
-    setBusError('')
-    try {
-      const query = `[out:json];(node["highway"="bus_stop"](${SAO_PAULO_BBOX.south},${SAO_PAULO_BBOX.west},${SAO_PAULO_BBOX.north},${SAO_PAULO_BBOX.east}););out body;`
-      const resp = await fetch('https://overpass-api.de/api/interpreter', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8' },
-        body: new URLSearchParams({ data: query })
-      })
-      if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
-      const json = await resp.json()
-      const pts = (json.elements || [])
-        .filter(el => el.type === 'node' && typeof el.lat === 'number' && typeof el.lon === 'number')
-        .map(el => ({ position: [el.lon, el.lat], name: el.tags?.name || 'Ponto de ônibus' }))
-      setBusStops(pts)
-    } catch (err) {
-      setBusError(err.message || String(err))
-    } finally {
-      setLoadingBus(false)
-    }
-  }, [])
+
 
   const getTooltip = useCallback(({ object }) => {
     if (!object) return null
@@ -230,22 +185,8 @@ export default function App() {
     return `${object.name || 'Ponto'}\n(${lat.toFixed(4)}, ${lng.toFixed(4)})`
   }, [])
 
-  const data = useMemo(() => CAPITAL_DATA, [])
 
-  const assetsWithH3 = useMemo(() => 
-    data.map(d => ({ ...d, h3index: h3.latLngToCell(d.position[1], d.position[0], h3Resolution) })), 
-  [data, h3Resolution])
 
-  const uniqueH3 = useMemo(() => [...new Set(assetsWithH3.map(a => a.h3index))], [assetsWithH3])
-
-  const busStopsWithHex = useMemo(() => 
-    busStops.map(p => ({ ...p, h3index: h3.latLngToCell(p.position[1], p.position[0], h3Resolution) })), 
-  [busStops, h3Resolution])
-
-  const selectedBusStops = useMemo(() => {
-    if (selectedHexes.size === 0) return []
-    return busStopsWithHex.filter(p => selectedHexes.has(p.h3index))
-  }, [busStopsWithHex, selectedHexes])
 
   const busStopsByHex = useMemo(() => {
     const counts = new Map()
@@ -257,45 +198,28 @@ export default function App() {
     Array.from(busStopsByHex.entries()).map(([hex, count]) => ({ hex, count })), 
   [busStopsByHex])
 
-  const selectedHexesArray = useMemo(() => [...selectedHexes], [selectedHexes])
+
   const styles = useMemo(() => getStyles(hudCollapsed), [hudCollapsed])
 
-  const scatterLayer = useMemo(() => new ScatterplotLayer({
-    id: 'capitals-scatter',
-    data,
-    getPosition: d => d.position,
-    getRadius: radiusPx,
-    getFillColor: d => d.color,
-    radiusUnits: 'pixels',
-    pickable: true,
-    autoHighlight: true
-  }), [data, radiusPx])
-
-  const hexLayer = useMemo(() => new HexagonLayer({
-    id: 'capitals-hex',
-    data: data.map(d => d.position),
-    getPosition: p => p,
-    radius: hexRadiusMeters,
-    elevationScale: hexElevationScale,
-    extruded: true,
-    coverage: 0.9,
-    pickable: true
-  }), [data, hexRadiusMeters, hexElevationScale])
-
-  const h3Layer = useMemo(() => new H3HexagonLayer({
-    id: 'capitals-h3',
-    data: uniqueH3,
-    getHexagon: h => h,
-    stroked: true,
-    filled: true,
-    extruded: true,
-    elevationScale: hexElevationScale,
-    getFillColor: [0, 128, 255, 80],
-    getLineColor: [0, 200, 255, 255],
-    lineWidthMinPixels: 2,
-    pickable: true,
-    onClick: handleHexClick
-  }), [uniqueH3, hexElevationScale, handleHexClick])
+  // Layer para exibir pontos de ônibus selecionados
+  const selectedStopsLayer = useMemo(() =>
+    selectionConfirmed && selectedBusStops.length > 0
+      ? new ScatterplotLayer({
+          id: 'selected-bus-stops',
+          data: selectedBusStops,
+          getPosition: d => d.position,
+          getRadius: 4,
+          getFillColor: [255, 80, 80, 255],
+          getLineColor: [255, 255, 255, 255],
+          stroked: true,
+          lineWidthMinPixels: 1,
+          radiusUnits: 'pixels',
+          pickable: true,
+          autoHighlight: true
+        })
+      : null,
+    [selectedBusStops, selectionConfirmed]
+  );
 
   const h3BusLayer = useMemo(() => new H3HexagonLayer({
     id: 'sp-bus-h3',
@@ -321,44 +245,7 @@ export default function App() {
     }
   }), [busHexData, selectedHexes, selectedHexesArray, selectionConfirmed, handleHexClick])
 
-  const selectedStopsLayer = useMemo(() => new ScatterplotLayer({
-    id: 'selected-bus-stops',
-    data: selectionConfirmed ? selectedBusStops : [],
-    getPosition: d => d.position,
-    getRadius: 4,
-    getFillColor: [255, 80, 80, 255],
-    getLineColor: [255, 255, 255, 255],
-    stroked: true,
-    lineWidthMinPixels: 1,
-    radiusUnits: 'pixels',
-    pickable: true,
-    autoHighlight: true
-  }), [selectedBusStops, selectionConfirmed])
 
-  const heatLayer = useMemo(() => new HeatmapLayer({
-    id: 'capitals-heat',
-    data,
-    getPosition: d => d.position,
-    getWeight: 1,
-    radiusPixels: Math.max(radiusPx, 8)
-  }), [data, radiusPx])
-
-  const basemapLayer = useMemo(() => new TileLayer({
-    id: 'basemap',
-    data: mapStyleUrl,
-    minZoom: 0,
-    maxZoom: 19,
-    tileSize: 512,
-    refinementStrategy: 'no-overlap',
-    renderSubLayers: props => {
-      const { boundingBox } = props.tile
-      return new BitmapLayer(props, {
-        data: null,
-        image: props.data,
-        bounds: [boundingBox[0][0], boundingBox[0][1], boundingBox[1][0], boundingBox[1][1]]
-      })
-    }
-  }), [mapStyleUrl])
 
   const selectedStyle = MAP_STYLES.find(s => s.url === mapStyleUrl)
   const labelsUrl = selectedStyle?.labels
@@ -381,153 +268,53 @@ export default function App() {
     }
   }) : null, [labelsUrl])
 
-  const layers = useMemo(() => {
-    let dataLayers
-    switch (layerMode) {
-      case 'scatter': dataLayers = [scatterLayer]; break
-      case 'hexagon': dataLayers = [hexLayer]; break
-      case 'heatmap': dataLayers = [heatLayer]; break
-      case 'h3': dataLayers = [h3Layer]; break
-      case 'h3-bus': dataLayers = [h3BusLayer, selectedStopsLayer]; break
-      default: dataLayers = [scatterLayer]
+  const basemapLayer = useMemo(() => new TileLayer({
+    id: 'basemap',
+    data: mapStyleUrl,
+    minZoom: 0,
+    maxZoom: 19,
+    tileSize: 512,
+    refinementStrategy: 'no-overlap',
+    renderSubLayers: props => {
+      const { boundingBox } = props.tile;
+      return new BitmapLayer(props, {
+        data: null,
+        image: props.data,
+        bounds: [boundingBox[0][0], boundingBox[0][1], boundingBox[1][0], boundingBox[1][1]]
+      });
     }
-    return [basemapLayer, ...dataLayers, labelsLayer].filter(Boolean)
-  }, [layerMode, basemapLayer, labelsLayer, scatterLayer, hexLayer, heatLayer, h3Layer, h3BusLayer, selectedStopsLayer])
+  }), [mapStyleUrl]);
+
+  const layers = useMemo(() => {
+    return [basemapLayer, h3BusLayer, selectedStopsLayer, labelsLayer].filter(Boolean);
+  }, [basemapLayer, h3BusLayer, selectedStopsLayer, labelsLayer]);
 
   return (
     <div style={{ height: '100%', position: 'relative', userSelect: 'none' }}>
-      <div style={styles.hud}>
-        <div style={styles.header}>
-          <div style={styles.title}>
-            <span>🗺️</span>
-            <span>Deck.gl Explorer</span>
-          </div>
-          <button style={styles.collapseBtn} onClick={() => setHudCollapsed(!hudCollapsed)} type="button">
-            {hudCollapsed ? '▼' : '▲'}
-          </button>
-        </div>
-
-        {!hudCollapsed && (
-          <>
-            <div style={styles.section}>
-              <label style={styles.label}>Câmera</label>
-              <div style={{ display: 'flex', gap: 12 }}>
-                <div style={{ flex: 1 }}>
-                  <span style={{ fontSize: 11, color: '#cbd5e1' }}>Pitch {Math.round(viewState.pitch)}°</span>
-                  <input type="range" min={0} max={60} value={viewState.pitch} onChange={e => setViewState(v => ({ ...v, pitch: +e.target.value }))} style={styles.slider} />
-                </div>
-                <div style={{ flex: 1 }}>
-                  <span style={{ fontSize: 11, color: '#cbd5e1' }}>Bearing {Math.round(viewState.bearing)}°</span>
-                  <input type="range" min={-180} max={180} value={viewState.bearing} onChange={e => setViewState(v => ({ ...v, bearing: +e.target.value }))} style={styles.slider} />
-                </div>
-              </div>
-            </div>
-
-            <div style={styles.section}>
-              <label style={styles.label}>Base do Mapa</label>
-              <select value={mapStyleUrl} onChange={e => setMapStyleUrl(e.target.value)} style={styles.select}>
-                {MAP_STYLES.map(({ url, label }) => <option key={url} style={styles.option} value={url}>{label}</option>)}
-              </select>
-            </div>
-
-            <div style={styles.section}>
-              <label style={styles.label}>Visualização</label>
-              <select value={layerMode} onChange={e => setLayerMode(e.target.value)} style={styles.select}>
-                {LAYER_MODES.map(({ value, label }) => <option key={value} style={styles.option} value={value}>{label}</option>)}
-              </select>
-            </div>
-
-            {(layerMode === 'scatter' || layerMode === 'heatmap') && (
-              <div style={styles.section}>
-                <label style={styles.label}>Raio: {radiusPx}px</label>
-                <input type="range" min={4} max={40} value={radiusPx} onChange={e => setRadiusPx(+e.target.value)} style={styles.slider} />
-              </div>
-            )}
-
-            {layerMode === 'hexagon' && (
-              <div style={styles.section}>
-                <label style={styles.label}>Hex Radius: {(hexRadiusMeters / 1000).toFixed(0)}km</label>
-                <input type="range" min={5000} max={40000} step={1000} value={hexRadiusMeters} onChange={e => setHexRadiusMeters(+e.target.value)} style={styles.slider} />
-                <label style={{ ...styles.label, marginTop: 8 }}>Elevação: {hexElevationScale}</label>
-                <input type="range" min={5} max={200} step={5} value={hexElevationScale} onChange={e => setHexElevationScale(+e.target.value)} style={styles.slider} />
-              </div>
-            )}
-
-            {layerMode === 'h3' && (
-              <div style={styles.section}>
-                <label style={styles.label}>H3 Resolution: {h3Resolution}</label>
-                <input type="range" min={6} max={10} step={1} value={h3Resolution} onChange={e => setH3Resolution(+e.target.value)} style={styles.slider} />
-                <label style={{ ...styles.label, marginTop: 8 }}>Elevação: {hexElevationScale}</label>
-                <input type="range" min={5} max={200} step={5} value={hexElevationScale} onChange={e => setHexElevationScale(+e.target.value)} style={styles.slider} />
-              </div>
-            )}
-
-            {layerMode === 'h3-bus' && (
-              <>
-                <div style={styles.section}>
-                  <button type="button" onClick={fetchBusStops} disabled={loadingBus} style={{ ...styles.btn, ...(loadingBus ? styles.btnDisabled : {}) }}>
-                    {loadingBus ? '⏳ Carregando...' : '🚌 Carregar Pontos de Ônibus'}
-                  </button>
-                  {busError && <div style={{ color: '#f87171', fontSize: 11, marginTop: 6 }}>⚠️ {busError}</div>}
-                </div>
-
-                <div style={styles.section}>
-                  <label style={styles.label}>H3 Resolution: {h3Resolution}</label>
-                  <input type="range" min={6} max={10} step={1} value={h3Resolution} onChange={e => setH3Resolution(+e.target.value)} style={styles.slider} />
-                </div>
-
-                <div style={styles.stats}>
-                  <div style={styles.stat}>
-                    <div style={styles.statValue}>{busStops.length.toLocaleString()}</div>
-                    <div style={styles.statLabel}>Paradas</div>
-                  </div>
-                  <div style={styles.stat}>
-                    <div style={styles.statValue}>{busHexData.length.toLocaleString()}</div>
-                    <div style={styles.statLabel}>Hexágonos</div>
-                  </div>
-                </div>
-
-                {selectedHexes.size > 0 && (
-                  <div style={styles.selection}>
-                    <div style={{ fontWeight: 600, fontSize: 12, marginBottom: 8, color: selectionConfirmed ? '#22c55e' : '#06b6d4' }}>
-                      {selectionConfirmed ? '✅' : '✓'} {selectedHexes.size} hex{selectedHexes.size > 1 ? 'es' : ''} selecionado{selectedHexes.size > 1 ? 's' : ''}
-                      {selectionConfirmed && ' (confirmado)'}
-                    </div>
-                    <div style={{ fontSize: 11, color: '#94a3b8', marginBottom: 6 }}>🚏 {selectedBusStops.length} pontos de ônibus</div>
-                    {!selectionConfirmed && selectedHexesArray.slice(0, 5).map(hexId => (
-                      <div key={hexId} style={styles.hexItem}>
-                        <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', fontFamily: 'monospace', fontSize: 10 }}>{hexId}</span>
-                        <button type="button" onClick={() => handleRemoveHex(hexId)} style={styles.removeBtn}>✕</button>
-                      </div>
-                    ))}
-                    {!selectionConfirmed && selectedHexes.size > 5 && (
-                      <div style={{ fontSize: 10, color: '#64748b', fontStyle: 'italic' }}>+{selectedHexes.size - 5} mais</div>
-                    )}
-                    {!selectionConfirmed ? (
-                      <button type="button" onClick={() => setSelectionConfirmed(true)} style={{ ...styles.clearBtn, background: 'linear-gradient(135deg, #06b6d4, #0891b2)', color: '#fff', fontWeight: 600 }}>
-                        ✓ Confirmar seleção
-                      </button>
-                    ) : (
-                      <button type="button" onClick={handleClearSelection} style={styles.clearBtn}>🗑️ Nova seleção</button>
-                    )}
-                  </div>
-                )}
-              </>
-            )}
-
-            <div style={styles.footer}>
-              <div style={{ marginBottom: 6, color: '#94a3b8' }}>Construído com</div>
-              <div>
-                <span style={styles.techBadge}>⚛️ React</span>
-                <span style={styles.techBadge}>🗺️ Deck.gl</span>
-                <span style={styles.techBadge}>⬡ H3</span>
-                <span style={styles.techBadge}>⚡ Vite</span>
-              </div>
-              <div style={{ marginTop: 8, fontSize: 9, color: '#475569' }}>Dados: OpenStreetMap via Overpass API</div>
-            </div>
-          </>
-        )}
-      </div>
+      <HudPanel
+        styles={styles}
+        hudCollapsed={hudCollapsed}
+        setHudCollapsed={setHudCollapsed}
+        viewState={viewState}
+        setViewState={setViewState}
+        mapStyleUrl={mapStyleUrl}
+        setMapStyleUrl={setMapStyleUrl}
+        h3Resolution={h3Resolution}
+        setH3Resolution={setH3Resolution}
+        loadingBus={loadingBus}
+        fetchBusStops={fetchBusStops}
+        busError={busError}
+        busStops={busStops}
+        busHexData={busHexData}
+        selectionConfirmed={selectionConfirmed}
+        selectedHexes={selectedHexes}
+        selectedHexesArray={selectedHexesArray}
+        selectedBusStops={selectedBusStops}
+        handleRemoveHex={handleRemoveHex}
+        handleClearSelection={handleClearSelection}
+        setSelectionConfirmed={setSelectionConfirmed}
+        MAP_STYLES={MAP_STYLES}
+      />
 
       <DeckGL
         layers={layers}
