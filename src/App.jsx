@@ -2,7 +2,6 @@ import React, { useMemo, useState, useCallback } from 'react'
 import { DeckGL } from '@deck.gl/react'
 import { BitmapLayer, ScatterplotLayer } from '@deck.gl/layers'
 import { H3HexagonLayer, TileLayer } from '@deck.gl/geo-layers'
-
 import { useBusStops } from './hooks/useBusStops'
 import { useMapSelection } from './hooks/useMapSelection'
 import HudPanel from './components/HudPanel'
@@ -22,7 +21,26 @@ const SP_BOUNDS = {
 }
 
 const MAP_STYLES = [
-  { url: 'https://basemaps.cartocdn.com/rastertiles/voyager_nolabels/{z}/{x}/{y}@2x.png', labels: 'https://basemaps.cartocdn.com/rastertiles/voyager_only_labels/{z}/{x}/{y}@2x.png', label: 'Carto Voyager' }
+  {
+    url: 'https://basemaps.cartocdn.com/rastertiles/voyager_nolabels/{z}/{x}/{y}@2x.png',
+    labels: 'https://basemaps.cartocdn.com/rastertiles/voyager_only_labels/{z}/{x}/{y}@2x.png',
+    label: 'Carto Voyager'
+  },
+  {
+    url: 'https://basemaps.cartocdn.com/rastertiles/light_all/{z}/{x}/{y}@2x.png',
+    labels: 'https://basemaps.cartocdn.com/rastertiles/light_only_labels/{z}/{x}/{y}@2x.png',
+    label: 'Carto Light'
+  },
+  {
+    url: 'https://basemaps.cartocdn.com/rastertiles/dark_all/{z}/{x}/{y}@2x.png',
+    labels: 'https://basemaps.cartocdn.com/rastertiles/dark_only_labels/{z}/{x}/{y}@2x.png',
+    label: 'Carto Dark'
+  },
+  {
+    url: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+    labels: null,
+    label: 'OpenStreetMap'
+  }
 ]
 
 const clamp = (val, min, max) => Math.max(min, Math.min(max, val))
